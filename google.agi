@@ -1,0 +1,276 @@
+#!/usr/bin/env perl 
+#
+# AGI script that interfaces Asterisk PBX to Google Assistant
+#
+# This program is free software, distributed under the terms of
+# the GNU General Public License Version 2. 
+#
+# ----
+# Install
+# ----
+# 1) Set up Asterisk PBX for Raspberry
+# $ sudo apt-get install asterisk
+# You need a SIP Phone attached to Asterisk
+#
+# 2) Set up Google Assistant and authentication as per
+# https://developers.google.com/assistant/sdk/prototype/getting-started-pi-python/config-dev-project-and-account
+#
+# 3) Install git files
+# $ git clone RaspiAsteriskGoogle
+# $ cd RaspiAsteriskGoogle
+# $ ./install.sh
+#
+# DEBUG ASTERISK
+# $ sudo asterisk -r
+# > agi set debug on
+# > core set verbose 4
+# Dial 6666#
+#
+# -----
+# Usage
+# -----
+# 1) Dial 6666# from your SIP phone
+#
+# NOTES:
+# AGI command format:
+# agi(google.agi,[lang],[timeout],[intkey],[NOBEEP])
+#
+# Records from the current channel until 2 seconds of silence are detected
+# (controlled by the 'timeout' argument, -1 for no timeout) or the
+# interrupt key (# by default) is pressed. 
+#
+# If NOBEEP is set, no beep sound is played
+# back to the user to indicate the start of the recording.
+#
+# The recorded sound is send over to Google Assistance API and the
+# returned audio is placed into a temp file and played back.
+#
+# Various audio conversions
+# sox alexa-in.wav -t raw -r 8000 -e signed-integer -b 16 -c 1 asterisk.sln
+# sox alexa-out.wav -t raw -r 8k -s -2 -c 1 asterisk.sln
+# sox asterisk.sln -e signed-integer -b 16 -r 16000 alexa.wav
+#
+# IMPORTANT
+# Requires Google Developer Account + Google OAUTH authentication
+# 
+
+use warnings;
+use strict;
+use URI::Escape;
+use File::Copy qw(move);
+use File::Temp qw(tempfile);
+use Encode qw(encode);
+#use JSON qw(decode_json);
+
+$| = 1;
+
+# ----------------------------- #
+#   User defined parameters:    #
+# ----------------------------- #
+# Default language (future)     # 
+my $language = "en-us";
+
+# Default max silence timeout   #
+my $timeout = 2;
+
+# Absolute Recording timeout    #
+my $abs_timeout = -1;
+
+# Default interrupt key         #
+my $intkey = "#";
+
+# Verbose debugging messages    #
+my $debug = 1;
+
+# ----------------------------- #
+
+my %AGI;
+my $ua;
+my $fh;
+my @result;
+my $name;
+my $audio;
+my $uarequest;
+my $uaresponse;
+my %response;
+my $endian;
+my $silence;
+my $filetype;
+my $json;
+my $results    = 1;
+my $beep       = "BEEP";
+my $comp_level = -8;
+my $ua_timeout = 10;
+my $tmpdir     = "/tmp";
+my $tmpname    = "$tmpdir/google_audio$$";
+my $sox        = "/usr/bin/sox";
+my $format     = "wav";
+my $command    = "googlesamples.assistant";
+my $api_dir    = "/home/pi/.config/googlesamples-assistant";
+my $api_json_file = "$api_dir/assistant_credentials.json";
+my $thank	= "/usr/share/asterisk/sounds/en/auth-thankyou";
+
+# Store AGI input #
+($AGI{arg_1}, $AGI{arg_2}, $AGI{arg_3}, $AGI{arg_4}) = @ARGV;
+while (<STDIN>) {
+	chomp;
+	last if (!length);
+	$AGI{$1} = $2 if (/^agi_(\w+)\:\s+(.*)$/);
+}
+
+$name = " -- $AGI{request}:";
+console_log ("Starting...") if ($debug);
+
+# Setting language, timeout, interrupt keys and BEEP indication #
+if (length($AGI{arg_1})) {
+	$language = $AGI{arg_1} if ($AGI{arg_1} =~ /^[a-z]{2}(-[a-zA-Z]{2,6})?$/);
+}
+
+if (length($AGI{arg_2})) {
+	if ($AGI{arg_2} == -1) {
+		$silence = "";
+	} elsif ($AGI{arg_2} =~ /^\d+$/) {
+		$silence = "s=$AGI{arg_2}";
+	} else {
+		$silence = "s=$timeout";
+	}
+} else {
+	$silence = "s=$timeout";
+}
+
+if (length($AGI{arg_3})) {
+	$intkey = "0123456789#*" if ($AGI{arg_3} eq "any");
+	$intkey = $AGI{arg_3} if ($AGI{arg_3} =~ /^[0-9*#]+$/);
+}
+
+if (length($AGI{arg_4})) {
+	$beep = "" if ($AGI{arg_4} eq "NOBEEP");
+}
+
+# Answer channel if not already answered #
+console_log ("Checking channel status.") if ($debug);
+print "CHANNEL STATUS\n";
+@result = checkresponse();
+if ($result[0] == 4) {
+	console_log ("Answering channel.") if ($debug);
+	print "ANSWER\n";
+	@result = checkresponse();
+	if ($result[0] != 0) {
+		die "$name Failed to answer channel.\n";
+	}
+}
+
+# Handle interrupts 
+$SIG{'INT'} = \&int_handler;
+$SIG{'HUP'} = \&int_handler;
+
+
+####
+# START OF REQ/RESP AUDIO HANDLING
+####
+
+# RECORD REQUEST AUDIOFILE 
+console_log ("RECORD FILE $tmpname $format $intkey $abs_timeout $beep $silence") if ($debug);
+print "RECORD FILE $tmpname $format \"$intkey\" \"$abs_timeout\" $beep \"$silence\"\n";
+@result = checkresponse();
+die "$name Failed to record file, aborting...\n" if ($result[0] == -1);
+
+# END RECORDING
+console_log ("Playing $thank") if ($debug);
+my $res = playback($thank, $intkey);
+        die if ($res < 0);
+
+# RE-ENCODE REQUEST WAV AUDIO FILE FROM 8000 TO 16000
+console_log ("Converting $sox $tmpname.$format.") if ($debug);
+my $cmd = "$sox $tmpname.$format -r 16000 ${tmpname}_in.wav";
+console_log ("CMD: $cmd") if ($debug);
+my $status = qx/$cmd/; 
+
+# SEND/RCV GOOGLE API Request/Response 
+console_log ("Calling gRPC $command") if ($debug);
+my $v = "";
+$v = "-v" if ($debug);
+$cmd = "python -m ${command} --credentials ${api_json_file} -i ${tmpname}_in.wav -o ${tmpname}_out.wav ${v}";
+console_log ("CMD: $cmd") if ($debug);
+$status = qx/$cmd/; 
+console_log ("Got gRPC API response.") if ($debug);
+
+# CONVERT 16K WAV FILE TO 8KHZ SLN
+console_log ("Converting 16K wav to 8K $tmpname.wav") if ($debug);
+$cmd = "sox \"${tmpname}_out.wav\" -t raw -r 8k -s -2 -c 1 \"$tmpname.sln\"\n";
+$status = qx/$cmd/; 
+
+# PLAY RESPONSE
+# NOTE THAT ASTERISK EXPECTS NAME HERE W/O THE EXTENSION.
+# Else you get "...file .sln does not exist in any format" -- Dumb
+console_log ("Playing ${tmpname}") if ($debug);
+$res = playback("${tmpname}", $intkey);
+        die if ($res < 0);
+
+# CLEAN
+if (!$debug)
+{
+    unlink "$tmpname*";
+}
+
+exit;
+
+
+#------------------------------------------
+
+
+
+sub checkresponse {
+	my $input = <STDIN>;
+	my @values;
+
+	chomp $input;
+	if ($input =~ /^200 result=(-?\d+)\s?(.*)$/) {
+		warn ("Command returned: $input\n") if ($debug);
+		@values = ("$1", "$2");
+	} else {
+		$input .= <STDIN> if ($input =~ /^520-Invalid/);
+		warn ("Unexpected result: $input\n");
+		@values = (-1, -1);
+	}
+	return @values;
+}
+
+
+sub int_handler {
+	die "$name Interrupt signal received, terminating...\n";
+}
+
+sub playback {
+        my ($file, $keys) = @_;
+        my @response;
+
+        print "STREAM FILE $file \"$keys\"\n";
+        @response = checkresponse();
+        if ($response[0] >= 32 && chr($response[0]) =~ /[\w*#]/) {
+                console_log("Got digit chr($response[0])") if ($debug);
+                print "SET EXTENSION ", chr($response[0]), "\n";
+                checkresponse();
+                print "SET PRIORITY 1\n";
+                checkresponse();
+        } elsif ($response[0] == -1) {
+                console_log("Failed to play $file.");
+        }
+        return $response[0];
+}
+
+sub console_log {
+        foreach my $message (@_) {
+                warn "$name $message\n";
+                print "NOOP \"$name $message\"\n";
+                checkresponse();
+        }
+}
+
+
+END {
+	if ($tmpname) {
+		console_log ("Cleaning temp files.") if ($debug);
+		#unlink glob "$tmpname.*";
+	}
+}
