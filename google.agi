@@ -5,62 +5,15 @@
 # This program is free software, distributed under the terms of
 # the GNU General Public License Version 2. 
 #
-# ----
-# Install
-# ----
-# 1) Set up Asterisk PBX for Raspberry
-# $ sudo apt-get install asterisk
-# You need a SIP Phone attached to Asterisk
+# For Documentation, See
+# https://github.com/rgrokett/RaspiAsteriskGoogle
 #
-# 2) Set up Google Assistant and authentication as per
-# https://developers.google.com/assistant/sdk/prototype/getting-started-pi-python/config-dev-project-and-account
-#
-# 3) Install git files
-# $ git clone RaspiAsteriskGoogle
-# $ cd RaspiAsteriskGoogle
-# $ ./install.sh
-#
-# DEBUG ASTERISK
-# $ sudo asterisk -r
-# > agi set debug on
-# > core set verbose 4
-# Dial 6666#
-#
-# -----
-# Usage
-# -----
-# 1) Dial 6666# from your SIP phone
-#
-# NOTES:
-# AGI command format:
-# agi(google.agi,[lang],[timeout],[intkey],[NOBEEP])
-#
-# Records from the current channel until 2 seconds of silence are detected
-# (controlled by the 'timeout' argument, -1 for no timeout) or the
-# interrupt key (# by default) is pressed. 
-#
-# If NOBEEP is set, no beep sound is played
-# back to the user to indicate the start of the recording.
-#
-# The recorded sound is send over to Google Assistance API and the
-# returned audio is placed into a temp file and played back.
-#
-# Various audio conversions
-# sox alexa-in.wav -t raw -r 8000 -e signed-integer -b 16 -c 1 asterisk.sln
-# sox alexa-out.wav -t raw -r 8k -s -2 -c 1 asterisk.sln
-# sox asterisk.sln -e signed-integer -b 16 -r 16000 alexa.wav
-#
-# IMPORTANT
-# Requires Google Developer Account + Google OAUTH authentication
+# Version 1.0 - 2017-05-02 r.grokett
+# 
 # 
 
 use warnings;
 use strict;
-use URI::Escape;
-use File::Copy qw(move);
-use File::Temp qw(tempfile);
-use Encode qw(encode);
-#use JSON qw(decode_json);
 
 $| = 1;
 
@@ -80,7 +33,7 @@ my $abs_timeout = -1;
 my $intkey = "#";
 
 # Verbose debugging messages    #
-my $debug = 1;
+my $debug = 0;
 
 # ----------------------------- #
 
@@ -196,21 +149,22 @@ $status = qx/$cmd/;
 console_log ("Got gRPC API response.") if ($debug);
 
 # CONVERT 16K WAV FILE TO 8KHZ SLN
-console_log ("Converting 16K wav to 8K $tmpname.wav") if ($debug);
-$cmd = "sox \"${tmpname}_out.wav\" -t raw -r 8k -s -2 -c 1 \"$tmpname.sln\"\n";
+console_log ("Converting 16K wav to 8K $tmpname.sln") if ($debug);
+$cmd = "sox \"${tmpname}_out.wav\" -t raw -r 8k -s -2 -c 1 \"${tmpname}_8k.sln\"\n";
 $status = qx/$cmd/; 
+
 
 # PLAY RESPONSE
 # NOTE THAT ASTERISK EXPECTS NAME HERE W/O THE EXTENSION.
 # Else you get "...file .sln does not exist in any format" -- Dumb
-console_log ("Playing ${tmpname}") if ($debug);
-$res = playback("${tmpname}", $intkey);
+console_log ("Playing ${tmpname}_8k") if ($debug);
+$res = playback("${tmpname}_8k", $intkey);
         die if ($res < 0);
 
 # CLEAN
 if (!$debug)
 {
-    unlink "$tmpname*";
+    unlink glob "$tmpname*";
 }
 
 exit;
