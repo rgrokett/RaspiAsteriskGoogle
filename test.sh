@@ -1,6 +1,8 @@
 #!/bin/sh
 # TEST GOOGLE API
-#
+# v1.1
+
+JSON="/home/pi/.config/google-oauthlib-tool/credentials.json"
 
 # CHECK FOR GOOGLE CREDENTIALS
 if [ -f /home/pi/client_secret.json ];
@@ -11,17 +13,16 @@ else
 fi
 
 # CHECK FOR OAUTH
-if [ -f "/home/pi/.config/googlesamples-assistant/assistant_credentials.json" ];
+if [ -f "$JSON" ];
 then
-        echo "Found OAUTH assistant_credentials.json OK"
+        echo "Found OAUTH credentials.json OK"
 else
         echo "NO Google API OAUTH found! SEE DOCS."
 fi
 
 # TEST SEND RECEIVE FILE
-JSON="/home/pi/.config/googlesamples-assistant/assistant_credentials.json"
 echo "Sending sample to Google Assistant API..."
-sudo python -m googlesamples.assistant --credentials /home/pi/.config/googlesamples-assistant/assistant_credentials.json -i in.wav -o out.wav -v
+sudo googlesamples-assistant-pushtotalk --credentials $JSON -i in.wav -o out.wav -v
 
 echo
 echo "AUDIO FILES:"

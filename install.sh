@@ -5,6 +5,8 @@ sudo cp google.agi /usr/share/asterisk/agi-bin/google.agi
 sudo cp *.sln /usr/share/asterisk/sounds/custom/
 echo "Copied AGI and audio files to Asterisk"
 
+JSON="/home/pi/.config/google-oauthlib-tool/credentials.json"
+
 # VERIFY GOOGLE CLIENT CREDENTIALS
 if [ -f /home/pi/client_secret.json ]; 
 then
@@ -14,9 +16,9 @@ else
 fi
 
 # VERIFY GOOGLE OAUTH
-if [ -f "/home/pi/.config/googlesamples-assistant/assistant_credentials.json" ];
+if [ -f "$JSON" ];
 then
-	echo "Found OAUTH assistant_credentials.json OK"
+	echo "Found OAUTH credentials.json OK"
 else
 	echo "NO Google API OAUTH found! SEE DOCS."
 fi

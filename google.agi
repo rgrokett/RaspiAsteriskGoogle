@@ -8,7 +8,7 @@
 # For Documentation, See
 # https://github.com/rgrokett/RaspiAsteriskGoogle
 #
-# Version 1.0 - 2017-05-02 r.grokett
+# Version 1.1 - 2017-06-16 r.grokett
 # 
 # 
 
@@ -58,9 +58,9 @@ my $tmpdir     = "/tmp";
 my $tmpname    = "$tmpdir/google_audio$$";
 my $sox        = "/usr/bin/sox";
 my $format     = "wav";
-my $command    = "googlesamples.assistant";
-my $api_dir    = "/home/pi/.config/googlesamples-assistant";
-my $api_json_file = "$api_dir/assistant_credentials.json";
+my $command    = "googlesamples-assistant-pushtotalk";
+my $oauth_dir  = "/home/pi/.config/google-oauthlib-tool";
+my $api_json_file = "$oauth_dir/credentials.json";
 my $thank	= "/usr/share/asterisk/sounds/en/auth-thankyou";
 
 # Store AGI input #
@@ -143,7 +143,7 @@ my $status = qx/$cmd/;
 console_log ("Calling gRPC $command") if ($debug);
 my $v = "";
 $v = "-v" if ($debug);
-$cmd = "python -m ${command} --credentials ${api_json_file} -i ${tmpname}_in.wav -o ${tmpname}_out.wav ${v}";
+$cmd = "${command} --credentials ${api_json_file} -i ${tmpname}_in.wav -o ${tmpname}_out.wav ${v}";
 console_log ("CMD: $cmd") if ($debug);
 $status = qx/$cmd/; 
 console_log ("Got gRPC API response.") if ($debug);
@@ -228,3 +228,4 @@ END {
 		#unlink glob "$tmpname.*";
 	}
 }
+
